@@ -5,32 +5,36 @@ import {
   KafkaOptions,
   ReadPacket,
   ServerKafka,
-} from '@nestjs/microservices';
-import {BaseRpcContext} from '@nestjs/microservices/ctx-host/base-rpc.context';
-import {Consumer, EachMessagePayload, IHeaders,} from '@nestjs/microservices/external/kafka.interface';
-import {connectable, isObservable, Subject} from 'rxjs';
+} from "@nestjs/microservices";
+import { BaseRpcContext } from "@nestjs/microservices/ctx-host/base-rpc.context";
+import {
+  Consumer,
+  EachMessagePayload,
+  IHeaders,
+  KafkaMessage,
+} from "@nestjs/microservices/external/kafka.interface";
+import { connectable, isObservable, Subject } from "rxjs";
 import {
   KAFKA_DEFAULT_DELAY,
   KAFKA_DEFAULT_MULTIPLIER,
   NO_EVENT_HANDLER,
   NO_MESSAGE_HANDLER,
   TopicSuffixingStrategy,
-} from './constants';
-import {KafkaAdmin} from './kafka-admin';
-import {getRetryMetadataByKey} from './retry-metadata.global';
-import {getDeadTopicName, getRetryTopicName} from './utils';
-import {isGTEV8_3_1} from './version';
+} from "./constants";
+import { IRetryMetadata } from "./interfaces/retry-metadata.interface";
+import { KafkaAdmin } from "./kafka-admin";
+import { getDeadTopicName, getRetryTopicName } from "./utils";
 
 export class KafkaStrategy
   extends ServerKafka
   implements CustomTransportStrategy
 {
-  constructor(protected readonly options: KafkaOptions['options']) {
+  constructor(protected readonly options: KafkaOptions["options"]) {
     super(options);
   }
 
   public async listen(
-    callback: (err?: unknown, ...optionalParams: unknown[]) => void,
+    callback: (err?: unknown, ...optionalParams: unknown[]) => void
   ): Promise<void> {
     this.client = this.createClient();
     await this.start(callback);
@@ -52,19 +56,22 @@ export class KafkaStrategy
 
   public async bindEvents(consumer: Consumer) {
     const registeredPatterns = [...this.messageHandlers.keys()];
-    const consumerSubscribeOptions = this.options.subscribe || {};
+    const consumerSubscribeOptions = this.options?.subscribe || {};
     const subscribeToPattern = async (pattern: string) =>
       consumer.subscribe({
         topic: pattern,
         ...consumerSubscribeOptions,
       });
     await Promise.all(registeredPatterns.map(subscribeToPattern));
-    const autoCommit = this.options.run?.autoCommit || false;
-    const consumerRunOptions = Object.assign(this.options.run || {}, {
+    const autoCommit = this.options?.run?.autoCommit || false;
+    const consumerRunOptions = Object.assign(this.options?.run || {}, {
       autoCommit,
-      eachMessage: async (payload) => {
+      eachMessage: async (payload: EachMessagePayload) => {
         const { rawMessage, isRetry } = this.parseRawMessage(payload);
-        const { topic, partition } = rawMessage;
+        const { topic, partition } = rawMessage as {
+          topic: string;
+          partition: number;
+        };
         const offset = parseInt(rawMessage.offset) + 1;
         if (isRetry) {
           const remainingTime = this.getRemainingTimeToProcess(rawMessage);
@@ -74,8 +81,8 @@ export class KafkaStrategy
               this.consumer.resume([{ topic, partitions: [partition] }]);
             }, remainingTime);
             setTimeout(async () => {
-              await this.handleMessage(rawMessage);
-              this.consumer.commitOffsets([
+              await this.handleMessage(payload);
+              await this.consumer.commitOffsets([
                 { topic: topic, partition, offset: `${offset}` },
               ]);
             }, remainingTime);
@@ -83,8 +90,8 @@ export class KafkaStrategy
             return;
           }
         }
-        await this.handleMessage(rawMessage);
-        this.consumer.commitOffsets([
+        await this.handleMessage(payload);
+        await this.consumer.commitOffsets([
           { topic: topic, partition, offset: `${offset}` },
         ]);
       },
@@ -92,32 +99,34 @@ export class KafkaStrategy
     await consumer.run(consumerRunOptions);
   }
 
-  public getRemainingTimeToProcess(rawMessage) {
+  public getRemainingTimeToProcess(
+    rawMessage: KafkaMessage & { topic: string; partition: number }
+  ) {
     const { timestamp, headers } = rawMessage;
-    const delay = headers.delay;
+    const delay = headers?.delay as string;
     return parseInt(timestamp) + parseInt(delay) - +new Date();
   }
 
   parseRawMessage(payload: EachMessagePayload) {
-    const rawMessage = this.parser.parse(
+    const rawMessage = this.parser.parse<
+      KafkaMessage & { topic: string; partition: number }
+    >(
       Object.assign(payload.message, {
         topic: payload.topic,
         partition: payload.partition,
-      }),
+      })
     );
-
-    const isRetry =
-      rawMessage.headers.tried &&
-      rawMessage.headers.delay &&
-      !rawMessage.headers.isCompleted;
+    const headers = rawMessage.headers;
+    const isRetry = headers?.tried && headers?.delay && !headers?.isCompleted;
 
     return { isRetry, rawMessage };
   }
 
-  public async handleMessage(rawMessage) {
-    const { topic, partition, headers } = rawMessage;
+  public async handleMessage(payload: EachMessagePayload) {
+    const { rawMessage } = this.parseRawMessage(payload);
+    const { topic, partition, headers = {} } = rawMessage;
     console.log(
-      `**** Handle message - Topic: ${topic} - Partition: ${partition} ***** ${new Date().toLocaleString()} `,
+      `**** Handle message - Topic: ${topic} - Partition: ${partition} ***** ${new Date().toLocaleString()} `
     );
     console.log(rawMessage.value);
     const correlationId = headers[KafkaHeaders.CORRELATION_ID];
@@ -130,34 +139,32 @@ export class KafkaStrategy
     const kafkaContext = new KafkaContext([rawMessage, partition, topic]);
     // if the correlation id or reply topic is not set
     // then this is an event (events could still have correlation id)
-    if (!correlationId || !replyTopic) {
-      return this.handleEvent(packet.pattern, packet, kafkaContext);
-    }
+    if (!correlationId || !replyTopic)
+      return this.handleEvent(packet.pattern as string, packet, kafkaContext);
 
     const publish = this.getPublisher(
-      replyTopic,
-      replyPartition,
-      correlationId,
+      replyTopic as string,
+      replyPartition as string,
+      correlationId as string
     );
-    const handler = this.getHandlerByPattern(packet.pattern);
-    if (!handler) {
+    const handler = this.getHandlerByPattern(packet.pattern as string);
+    if (!handler)
       return publish({
         id: correlationId,
         err: NO_MESSAGE_HANDLER,
       });
-    }
 
     const response$ = this.transformToObservable(
-      await handler(packet.data, kafkaContext),
+      await handler(packet.data, kafkaContext)
     );
     response$ && this.send(response$, publish);
   }
 
   public async handleEvent(
     pattern: string,
-    packet: ReadPacket,
-    context: BaseRpcContext,
-  ): Promise<any> {
+    packet: ReadPacket<KafkaMessage>,
+    context: BaseRpcContext
+  ): Promise<unknown> {
     const posRetryChar = pattern.indexOf(TopicSuffixingStrategy.RETRY_SUFFIX);
     if (posRetryChar !== -1) {
       pattern = pattern.substring(0, posRetryChar);
@@ -166,7 +173,7 @@ export class KafkaStrategy
     const handler = this.getHandlerByPattern(pattern);
     if (!handler) {
       return this.logger.error(
-        `${NO_EVENT_HANDLER} Event pattern: ${JSON.stringify(pattern)}.`,
+        `${NO_EVENT_HANDLER} Event pattern: ${JSON.stringify(pattern)}.`
       );
     }
 
@@ -175,12 +182,12 @@ export class KafkaStrategy
 
       if (isObservable(resultOrStream)) {
         resultOrStream.subscribe({
-          error: (error) => {
+          error: async (error) => {
             console.log(error);
             const headers: IHeaders = packet.data.headers;
             const payload = packet.data.value;
             if (!headers?.isCompleted) {
-              this.handleRetry(pattern, headers, payload);
+              await this.handleRetry(pattern, headers, payload);
             }
           },
         });
@@ -191,16 +198,14 @@ export class KafkaStrategy
         connectableSource.connect();
       }
     } catch (error) {
-      console.log('handle error', error);
+      console.log("handle error", error);
     }
   }
 
-  handleRetry(pattern: string, headers: IHeaders, payload) {
-    const handlerPattern = this.getHandlerByPattern(pattern);
-    let retry = handlerPattern?.extras?.retry || null;
-    if(!isGTEV8_3_1()) {
-      retry = getRetryMetadataByKey(pattern)['retry'] ?? null;
-    } 
+  async handleRetry(pattern: string, headers: IHeaders, payload) {
+    const retry =
+      (this.getHandlerByPattern(pattern)?.extras?.retry as IRetryMetadata) ||
+      undefined;
     if (!retry || retry?.attempts === 0) return;
 
     const initialDelay = retry.backoff?.delay || KAFKA_DEFAULT_DELAY;
@@ -210,19 +215,19 @@ export class KafkaStrategy
     }
 
     let nextTopic: string;
-    if (headers?.tried >= retry.attempts) {
-      headers.isCompleted = '1';
+    if (parseInt(headers?.tried as string) >= retry.attempts) {
+      headers.isCompleted = "1";
       nextTopic = getDeadTopicName(pattern);
     } else {
-      const tried: string = (headers?.tried as string) ?? '0';
+      const tried: string = (headers?.tried as string) ?? "0";
       const delay: string = (headers?.delay as string) ?? `${initialDelay}`;
       headers = {
         tried: `${parseInt(tried) + 1}`,
         delay: `${parseInt(delay) * multiplier}`,
       };
-      nextTopic = getRetryTopicName(pattern, headers.tried);
+      nextTopic = getRetryTopicName(pattern, headers?.tried as string);
     }
-    this.producer.send({
+    await this.producer.send({
       topic: nextTopic,
       messages: [
         {
@@ -237,15 +242,9 @@ export class KafkaStrategy
     const kafkaAdmin = new KafkaAdmin(this.client.admin());
     const handler = this.getHandlers();
     for (const [key, value] of handler.entries()) {
-
-      if(!isGTEV8_3_1()) {
-        value['extras'] = getRetryMetadataByKey(key);
-      }
-      if (value.extras.retry && value.extras.retry.attempts > 0) {
-        const retryTopics = await kafkaAdmin.createRetryTopics(
-          key,
-          value.extras.retry,
-        );
+      const retry = value.extras && (value.extras?.retry as IRetryMetadata);
+      if (retry && retry.attempts > 0) {
+        const retryTopics = await kafkaAdmin.createRetryTopics(key, retry);
         const subscribeToPattern = async (pattern: string) => {
           return consumer.subscribe({
             topic: pattern,

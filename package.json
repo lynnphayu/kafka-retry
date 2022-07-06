@@ -6,7 +6,13 @@
   "repository": "git@github.com:nattogo/kafka-retry.git",
   "author": "VanTT",
   "license": "MIT",
-  "keywords": ["kafkajs Non-Blocking Retries and Dead Letter Topics", "Kafkajs", "Nestjs","Nestjs Microservice","Nodejs"],
+  "keywords": [
+    "kafkajs Non-Blocking Retries and Dead Letter Topics",
+    "Kafkajs",
+    "Nestjs",
+    "Nestjs Microservice",
+    "Nodejs"
+  ],
   "scripts": {
     "prebuild": "rimraf dist",
     "build": "nest build",
@@ -18,14 +24,52 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
+  "eslintConfig": {
+    "$schema": "https://json.schemastore.org/eslintrc",
+    "parser": "@typescript-eslint/parser",
+    "plugins": [
+      "@typescript-eslint"
+    ],
+    "extends": [
+      "eslint:recommended",
+      "plugin:@typescript-eslint/recommended",
+      "plugin:@typescript-eslint/recommended-requiring-type-checking",
+      "plugin:prettier/recommended"
+    ],
+    "env": {
+      "node": true,
+      "jest": true
+    },
+    "rules": {
+      "@typescript-eslint/explicit-module-boundary-types": "off",
+      "@typescript-eslint/no-empty-function": "off",
+      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/unbound-method": "off",
+      "@typescript-eslint/no-misused-promises": [
+        "error",
+        {
+          "checksVoidReturn": false
+        }
+      ],
+      "@typescript-eslint/no-empty-interface": "off"
+    },
+    "parserOptions": {
+      "project": [
+        "**/tsconfig.json",
+        "**/tsconfig.spec.json"
+      ]
+    },
+    "ignorePatterns": [
+      "**/*.js"
+    ]
+  },
   "devDependencies": {
     "@nestjs/common": "^8.3.1",
     "@nestjs/config": "^1.0.2",
     "@nestjs/core": "^8.3.1",
     "@nestjs/microservices": "^8.3.1",
-    "@types/semver": "^7.3.9",
-    "@typescript-eslint/eslint-plugin": "^5.0.0",
-    "@typescript-eslint/parser": "^5.0.0",
+    "@typescript-eslint/eslint-plugin": "^5.7.0",
+    "@typescript-eslint/parser": "^5.7.0",
     "eslint": "^8.0.1",
     "eslint-config-prettier": "^8.3.0",
     "eslint-plugin-prettier": "^4.0.0",

@@ -1,30 +1,30 @@
-import { Admin } from '@nestjs/microservices/external/kafka.interface';
-import { AUTO_CREATE_RETRY_TOPIC, RetryTopicConstants } from './constants';
-import { IRetryMetadata } from './interfaces';
+import { Admin } from "@nestjs/microservices/external/kafka.interface";
+import { AUTO_CREATE_RETRY_TOPIC, RetryTopicConstants } from "./constants";
+import { IRetryMetadata } from "./interfaces";
 import {
   getDeadTopicName,
   getPatternRetryTopic,
   getRetryTopicName,
-} from './utils';
+} from "./utils";
 
 export class KafkaAdmin {
   constructor(protected readonly admin: Admin) {}
 
   public async createRetryTopics(
     pattern: string,
-    retryableTopic: IRetryMetadata,
+    retryableTopic: IRetryMetadata
   ) {
     const currentTopics = await this.admin.listTopics();
     const currentRetryTopics = currentTopics.filter((topic) => {
       return new RegExp(getPatternRetryTopic(pattern)).test(topic);
     });
-    const topics = [];
-    const result = [];
+    const topics: string[] = [];
+    const result: string[] = [];
     /*
      * Retry topics
      */
     for (let index = 1; index <= retryableTopic.attempts; index++) {
-      const retryTopicName = getRetryTopicName(pattern, index);
+      const retryTopicName = getRetryTopicName(pattern, index.toString());
       result.push(retryTopicName);
       if (
         index <= RetryTopicConstants.MAX_ATTEMPTS &&
